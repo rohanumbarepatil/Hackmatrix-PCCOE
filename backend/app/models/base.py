@@ -6,6 +6,9 @@ from app.models.staff import Staff
 from app.models.service import Service
 from app.models.facility_service import FacilityService
 from app.models.shift_assignment import ShiftAssignment
+from app.models.attendance import AttendanceEvent
+from app.models.leave import LeaveRequest
+from app.models.heartbeat import FacilityHeartbeat
 
 __all__ = [
     "Base",
@@ -15,4 +18,7 @@ __all__ = [
     "Service",
     "FacilityService",
     "ShiftAssignment",
+    "AttendanceEvent",
+    "LeaveRequest",
+    "FacilityHeartbeat",
 ]
