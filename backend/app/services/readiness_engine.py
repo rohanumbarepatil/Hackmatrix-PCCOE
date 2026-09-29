@@ -65,9 +65,8 @@ def evaluate_staff_readiness(
         .filter(
             AttendanceEvent.facility_id == facility_id,
             AttendanceEvent.staff_id == staff_id,
-            AttendanceEvent.event_type == "CHECK_IN",
         )
-        .order_by(AttendanceEvent.client_timestamp.desc())
+        .order_by(AttendanceEvent.id.desc())
         .first()
     )
 
@@ -107,13 +106,21 @@ def evaluate_staff_readiness(
     # Decision logic
     # -----------------------------
 
-    if attendance:
+    if attendance and attendance.event_type == "CHECK_IN":
         classification = "PRESENT"
         confidence = 0.98
 
         reason = (
             f"{staff.full_name} has a recorded check-in "
             f"for the facility."
+        )
+
+    elif attendance and attendance.event_type == "CHECK_OUT":
+        classification = "OFF_SHIFT"
+        confidence = 0.98
+
+        reason = (
+            f"{staff.full_name} has checked out and is currently off-shift."
         )
 
     elif approved_leave:

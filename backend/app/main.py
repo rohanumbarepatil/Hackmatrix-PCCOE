@@ -9,6 +9,9 @@ from app.models.base import Base
 from app.models.facility import Facility
 from app.models.staff import Staff
 from app.models.heartbeat import FacilityHeartbeat
+from app.models.attendance import AttendanceEvent
+from app.models.shift_assignment import ShiftAssignment
+from app.models.leave import LeaveRequest
 from app.services.readiness_engine import evaluate_staff_readiness
 from app.services.demo_seed import seed_demo_data
 from app.services.alert_engine import (
@@ -317,3 +320,155 @@ def district_overview(
 def seed_data():
     db = next(get_db())
     return seed_demo_data(db)
+
+
+# ---------------------------------------------------------
+# NEW STAFF DASHBOARD APIs
+# ---------------------------------------------------------
+from pydantic import BaseModel
+from datetime import datetime
+
+@app.get("/staff/all")
+def get_all_staff(db: Session = Depends(get_db)):
+    staff_members = db.query(Staff).all()
+    return {
+        "staff": [
+            {
+                "id": s.id,
+                "name": s.full_name,
+                "role": s.role,
+                "facility_id": s.facility_id
+            } for s in staff_members
+        ]
+    }
+
+@app.get("/staff/{staff_id}/shift")
+def get_staff_shift(staff_id: int, db: Session = Depends(get_db)):
+    staff = db.query(Staff).filter(Staff.id == staff_id).first()
+    if not staff:
+        return {"status": "error", "message": "Staff not found"}
+        
+    shift = db.query(ShiftAssignment).filter(
+        ShiftAssignment.staff_id == staff_id
+    ).order_by(ShiftAssignment.shift_date.desc()).first()
+    
+    return {
+        "staff": {
+            "id": staff.id,
+            "name": staff.full_name,
+            "role": staff.role,
+            "facility_id": staff.facility_id
+        },
+        "shift": {
+            "id": shift.id,
+            "shift_date": shift.shift_date.isoformat(),
+            "start_time": shift.start_time.isoformat(),
+            "end_time": shift.end_time.isoformat(),
+            "status": shift.status
+        } if shift else None
+    }
+
+class AttendancePayload(BaseModel):
+    facility_id: int
+    shift_assignment_id: int | None = None
+    client_timestamp: datetime
+    source: str = "PWA"
+
+@app.post("/attendance/check-in/{staff_id}")
+def staff_check_in(staff_id: int, payload: AttendancePayload, db: Session = Depends(get_db)):
+    latest_event = db.query(AttendanceEvent).filter(
+        AttendanceEvent.staff_id == staff_id
+    ).order_by(AttendanceEvent.id.desc()).first()
+    
+    if latest_event and latest_event.event_type == "CHECK_IN":
+        return {"status": "success", "event_id": latest_event.id, "message": "Duplicate ignored"}
+
+    event = AttendanceEvent(
+        staff_id=staff_id,
+        facility_id=payload.facility_id,
+        shift_assignment_id=payload.shift_assignment_id,
+        event_type="CHECK_IN",
+        client_timestamp=payload.client_timestamp,
+        received_timestamp=datetime.utcnow(),
+        sync_status="SYNCED",
+        source=payload.source
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return {"status": "success", "event_id": event.id}
+
+@app.post("/attendance/check-out/{staff_id}")
+def staff_check_out(staff_id: int, payload: AttendancePayload, db: Session = Depends(get_db)):
+    latest_event = db.query(AttendanceEvent).filter(
+        AttendanceEvent.staff_id == staff_id
+    ).order_by(AttendanceEvent.id.desc()).first()
+    
+    if not latest_event or latest_event.event_type == "CHECK_OUT":
+        return {"status": "success", "event_id": latest_event.id if latest_event else None, "message": "Duplicate ignored"}
+
+    event = AttendanceEvent(
+        staff_id=staff_id,
+        facility_id=payload.facility_id,
+        shift_assignment_id=payload.shift_assignment_id,
+        event_type="CHECK_OUT",
+        client_timestamp=payload.client_timestamp,
+        received_timestamp=datetime.utcnow(),
+        sync_status="SYNCED",
+        source=payload.source
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return {"status": "success", "event_id": event.id}
+
+class LeaveRequestPayload(BaseModel):
+    facility_id: int
+    start_datetime: datetime
+    end_datetime: datetime
+    reason: str
+
+@app.post("/leave/request/{staff_id}")
+def request_leave(staff_id: int, payload: LeaveRequestPayload, db: Session = Depends(get_db)):
+    # Automatically approve for hackathon demo purposes so it shows up in readiness
+    leave = LeaveRequest(
+        staff_id=staff_id,
+        facility_id=payload.facility_id,
+        start_datetime=payload.start_datetime,
+        end_datetime=payload.end_datetime,
+        reason=payload.reason,
+        status="APPROVED",
+        approved_by="Auto (Demo)"
+    )
+    db.add(leave)
+    db.commit()
+    db.refresh(leave)
+    return {"status": "success", "leave_id": leave.id}
+
+@app.get("/staff/{staff_id}/attendance")
+def get_staff_attendance(staff_id: int, db: Session = Depends(get_db)):
+    events = db.query(AttendanceEvent).filter(
+        AttendanceEvent.staff_id == staff_id
+    ).order_by(AttendanceEvent.id.desc()).limit(10).all()
+    
+    leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.staff_id == staff_id
+    ).order_by(LeaveRequest.start_datetime.desc()).limit(5).all()
+    
+    return {
+        "attendance": [
+            {
+                "id": e.id,
+                "event_type": e.event_type,
+                "timestamp": e.client_timestamp.isoformat(),
+            } for e in events
+        ],
+        "leaves": [
+            {
+                "id": l.id,
+                "status": l.status,
+                "start": l.start_datetime.isoformat(),
+                "end": l.end_datetime.isoformat()
+            } for l in leaves
+        ]
+    }
